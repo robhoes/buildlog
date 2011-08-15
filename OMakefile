@@ -1,0 +1,18 @@
+.PHONY: all install clean
+
+USE_OCAMLFIND = true
+NATIVE_ENABLED = true
+BYTE_ENABLED = $(not $(NATIVE_ENABLED))
+
+OCAMLFLAGS = -g -dtypes -thread -warn-error +a-4-6-9-27-28-29
+OCAMLPACKS =
+OCAML_OTHER_LIBS += unix
+
+FILES = buildlog
+
+OCamlProgram(buildlog, $(FILES))
+
+.DEFAULT: buildlog
+
+.PHONY: clean
+	rm -f *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot *.opt *.omc buildlog
