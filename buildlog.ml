@@ -131,17 +131,19 @@ let split c s =
 	List.rev words
 
 let read_conf () =
-	let file = open_in conf_file in
-	let rec read ac =
-		try
-			let line = input_line file in
-			let words = split ' ' line in
-			read ((List.hd words, List.tl words) :: ac)
-		with End_of_file -> ac
-	in
-	let conf = read [] in
-	close_in file;
-	conf
+	try
+		let file = open_in conf_file in
+		let rec read ac =
+			try
+				let line = input_line file in
+				let words = split ' ' line in
+				read ((List.hd words, List.tl words) :: ac)
+			with End_of_file -> ac
+		in
+		let conf = read [] in
+		close_in file ;
+		conf
+	with Sys_error _ -> []
 
 let write_conf conf =
 	let file = open_out conf_file in
@@ -166,6 +168,13 @@ let _ =
 		"Utility that links build numbers and repository logs";
 
 	let conf = read_conf () in
+	if conf = [] && not !rebuild
+	then begin
+		print_endline "No config file found. Please run the command with the -rebuild option:" ;
+		print_string  "git log | buildlog -rebuild -manifest <path_to_manifests.hg> " ;
+		print_endline "-repo <xen-api.git|xen-api-libs.git> -branches trunk,boston" ;
+		exit 1
+	end ;
 	let manifest, conf =
 		if !manifest <> "" then begin
 			ignore (List.remove_assoc "manifest" conf);
