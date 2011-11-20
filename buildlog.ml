@@ -92,28 +92,51 @@ let read_index branch =
 	close_in file;
 	{branch = branch; index = index}
 
-let print_info out commit dict =
+let string_of_info commit dict =
 	let print =
-		Printf.fprintf out "First %s build: %s\n" dict.branch
+		Printf.sprintf "First %s build: %s" dict.branch
 	in
 	if List.mem_assoc commit dict.index then
 		print (List.assoc commit dict.index)
 	else
 		print "none"
 
-let process dicts =
+let is_in_range range build =
+	match range with
+	| None, None -> true
+	| Some b, None -> build >= b
+	| None, Some b -> build <= b
+	| Some b, Some b' -> build >= b && build <= b'
+
+let output_log dicts out commit log =
+	let info = List.map (string_of_info commit) dicts in
+	let output = (List.hd log) :: info @ (List.tl log) in
+	List.iter (fun line -> output_string out (line ^ "\n")) output
+
+let check_range dicts range commit =
+	let builds = List.map (fun dict ->
+		if List.mem_assoc commit dict.index then
+			int_of_string (List.assoc commit dict.index)
+		else
+			-1
+	) dicts in
+	List.fold_left (fun a b -> is_in_range range b && a) true builds
+
+let process range dicts =
 	let out = Unix.open_process_out "less" in
-	let rec loop () =
+	let rec loop log =
 		let line = read_line () in
-		output_string out (line ^ "\n");
-		Scanf.sscanf line "%s %s" (fun a b ->
-			if a = "commit" then
-				List.iter (print_info out b) dicts
-		);
-		loop ()
+		let commit = Scanf.sscanf line "%s %s" (fun a b -> if a = "commit" then Some b else None) in
+		match commit with
+		| Some commit ->
+			if log <> [] && check_range dicts range commit then
+				output_log dicts out commit (List.rev log);
+			loop [line]
+		| None ->
+			loop (line :: log)
 	in
 	try
-		loop ()
+		loop []
 	with End_of_file ->
 		Unix.close_process_out out
 
@@ -152,17 +175,28 @@ let write_conf conf =
 	) conf;
 	close_out file
 
+let make_range range =
+	print_endline range;
+	try
+		Scanf.sscanf range "%[0-9]..%[0-9]" (fun a b ->
+			(try Some (int_of_string a) with _ -> None),
+			(try Some (int_of_string b) with _ -> None)
+		)
+	with End_of_file -> None, None
+
 let _ =
 	(* Parse command-line arguments *)
 	let rebuild = ref false in
 	let manifest = ref "" in
 	let repo = ref "" in
 	let branches = ref "" in
+	let range = ref "" in
 	Arg.parse [
 			"-rebuild", Arg.Set rebuild, "Rebuild the index";
 			"-manifest", Arg.Set_string manifest, "Path to manifests.hg";
-			"-repo", Arg.Set_string repo, "Name of the source repository)";
-			"-branches", Arg.Set_string branches, "Name of the source repository)";
+			"-repo", Arg.Set_string repo, "Name of the source repository";
+			"-branches", Arg.Set_string branches, "List of branches";
+			"-range", Arg.Set_string range, "Only show commits that entered the build in the given range (inclusive)";
 		]
 		(fun x -> Printf.printf "Ignoring argument: %s" x)
 		"Utility that links build numbers and repository logs";
@@ -198,6 +232,7 @@ let _ =
 			List.assoc "branches" conf, conf
 	in
 	write_conf conf;
+	let range' = make_range !range in
 
 	let dicts = List.map (fun branch ->
 			if !rebuild then
@@ -206,5 +241,5 @@ let _ =
 				read_index branch
 		) branches
 	in
-	process dicts
+	process range' dicts
 
