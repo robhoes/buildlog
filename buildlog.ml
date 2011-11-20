@@ -105,7 +105,7 @@ let is_in_range range build =
 	match range with
 	| None, None -> true
 	| Some b, None -> build >= b
-	| None, Some b -> build <= b
+	| None, Some b -> build <= b && build > -1
 	| Some b, Some b' -> build >= b && build <= b'
 
 let output_log dicts out commit log =
