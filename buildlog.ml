@@ -114,13 +114,23 @@ let output_log dicts out commit log =
 	List.iter (fun line -> output_string out (line ^ "\n")) output
 
 let check_range dicts range commit =
+	let dicts =
+		match range with
+		| _, _, None -> dicts
+		| _, _, Some branch ->
+			try [List.find (fun dict -> dict.branch = branch) dicts]
+			with Not_found -> []
+	in
 	let builds = List.map (fun dict ->
 		if List.mem_assoc commit dict.index then
 			int_of_string (List.assoc commit dict.index)
 		else
 			-1
 	) dicts in
-	List.fold_left (fun a b -> is_in_range range b && a) true builds
+	List.fold_left (fun a b ->
+		match range with
+		| x, y, _ -> is_in_range (x, y) b || a
+	) false builds
 
 let process range dicts =
 	let out = Unix.open_process_out "less" in
@@ -176,13 +186,19 @@ let write_conf conf =
 	close_out file
 
 let make_range range =
-	print_endline range;
 	try
+		let branch =
+			try
+				let i = String.index range '@' in
+				Some (String.sub range (i + 1) (String.length range - i - 1))
+			with Not_found -> None
+		in
 		Scanf.sscanf range "%[0-9]..%[0-9]" (fun a b ->
 			(try Some (int_of_string a) with _ -> None),
-			(try Some (int_of_string b) with _ -> None)
+			(try Some (int_of_string b) with _ -> None),
+			branch
 		)
-	with End_of_file -> None, None
+	with End_of_file -> None, None, None
 
 let _ =
 	(* Parse command-line arguments *)
