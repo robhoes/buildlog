@@ -1,53 +1,95 @@
 let buildlog_index = "buildlog.index"
 let conf_file = "buildlog.conf"
+let url_base = "http://hg.uk.xensource.com/carbon/manifests.hg/raw-file/tip/carbon/"
 
 type dict_t = {
 	branch: string;
-	index: (string * string) list
+	index: (string * int) list
 }
 
-let rebuild_index manifest repo branch =
-	let path = manifest ^ "/carbon/" ^ branch ^ "/daily" in
-	let dir = Unix.opendir path in
-	let rec read_manifest ac =
+let get_builds_from_manifest branch =
+	let url = url_base ^ branch ^ "/daily/" in
+	let cmd = "curl -s " ^ url in
+	let input = Unix.open_process_in cmd in
+	let rec loop ac =
 		try
-			let name = Unix.readdir dir in
-			match name with
-			| "." | ".." -> read_manifest ac
-			| build ->
-				let file = open_in (path ^ "/" ^ build ^ "/manifest") in
-				let rec loop () =
-					let line = input_line file in
-					Scanf.sscanf line "%s %s %s" (fun _ repo' hash ->
-						if repo' = repo then
-							hash
-						else
-							loop ()
-					)
-				in
-				try
-					let hash = loop () in
-					close_in file;
-					let ac =
-						if not (List.mem_assoc hash ac) then
-							(hash, build) :: ac
-						else if (int_of_string (List.assoc hash ac)) > (int_of_string build) then begin
-							let ac = List.remove_assoc hash ac in
-							(hash, build) :: ac
-						end else
-							ac
-					in
-					read_manifest ac
-				with End_of_file ->
-					close_in file;
-					read_manifest ac
+			let line = input_line input in
+			try
+				let build = Scanf.sscanf line "%s %d" (fun _ b -> b) in
+				loop (build :: ac)
+			with _ ->
+				loop ac
 		with End_of_file ->
-			Unix.closedir dir;
 			ac
 	in
-	let index = read_manifest [] in
+	let builds = loop [] in
+	ignore (Unix.close_process_in input);
+	builds
 
-	let index = List.sort (fun (_, b) (_, b') -> compare (int_of_string b) (int_of_string b')) index in
+exception No_index
+
+let read_index branch =
+	try
+		let file = open_in (branch ^ "-" ^ buildlog_index) in
+		let rec loop ac =
+			try
+				Scanf.fscanf file "%s %d\n" (fun hash build ->
+					loop ((hash, build) :: ac)
+				)
+			with End_of_file ->
+				ac
+		in
+		let index = loop [] in
+		close_in file;
+		{branch = branch; index = index}
+	with Sys_error _ ->
+		raise No_index
+
+exception Stop
+let rebuild_index manifest repo branch =
+	let builds_in_manifest = get_builds_from_manifest branch in
+	let current_index = (read_index branch).index in
+	let last_build_in_index = List.fold_left (fun m (_, b) -> max m b) 0 current_index in
+	let builds_not_in_index = List.filter (fun build -> build > last_build_in_index) builds_in_manifest in
+	print_endline (string_of_int last_build_in_index);
+	print_string (String.concat "\n" (List.map string_of_int builds_not_in_index));
+	let rec read_manifest ac = function
+		| [] -> ac
+		| build :: other->
+			let url = Printf.sprintf "%s%s/daily/%d/manifest" url_base branch build in
+			let cmd = "curl -s " ^ url in
+			let input = Unix.open_process_in cmd in
+
+			let rec loop () =
+				let line = input_line input in
+				Scanf.sscanf line "%s %s %s" (fun _ repo' hash ->
+					if repo' = repo then
+						(print_endline line;
+						hash)
+					else
+						loop ()
+				)
+			in
+			try
+				let hash = loop () in
+				ignore (Unix.close_process_in input);
+				let ac =
+					if not (List.mem_assoc hash ac) then
+						(hash, build) :: ac
+					else if List.assoc hash ac > build then begin
+						let ac = List.remove_assoc hash ac in
+						(hash, build) :: ac
+					end else
+						ac
+				in
+				read_manifest ac other
+			with End_of_file ->
+				ignore (Unix.close_process_in input);
+				read_manifest ac other
+	in
+	let index = (read_manifest current_index builds_not_in_index) in
+	(*print_string (String.concat "\n" (List.map (fun (a, b) -> Printf.sprintf "%s %d" a b) index));*)
+	let index = List.sort (fun (_, b) (_, b') -> compare b b') index in
 	let index, _ = List.fold_left (fun (ac, prev) (h, b) ->
 		match prev with
 		| None -> (h, b) :: ac, Some h
@@ -73,23 +115,9 @@ let rebuild_index manifest repo branch =
 	) ([], None) index in
 
 	let out = open_out (branch ^ "-" ^ buildlog_index) in
-	List.iter (fun (h, b) -> Printf.fprintf out "%s %s\n" h b) index;
+	List.iter (fun (h, b) -> Printf.fprintf out "%s %d\n" h b) index;
 	close_out out;
 
-	{branch = branch; index = index}
-
-let read_index branch =
-	let file = open_in (branch ^ "-" ^ buildlog_index) in
-	let rec loop ac =
-		try
-			Scanf.fscanf file "%s %s\n" (fun hash build ->
-				loop ((hash, build) :: ac)
-			)
-		with End_of_file ->
-			ac
-	in
-	let index = loop [] in
-	close_in file;
 	{branch = branch; index = index}
 
 let string_of_info commit dict =
@@ -97,7 +125,7 @@ let string_of_info commit dict =
 		Printf.sprintf "First %s build: %s" dict.branch
 	in
 	if List.mem_assoc commit dict.index then
-		print (List.assoc commit dict.index)
+		print (string_of_int (List.assoc commit dict.index))
 	else
 		print "none"
 
@@ -123,7 +151,7 @@ let check_range dicts range commit =
 	in
 	let builds = List.map (fun dict ->
 		if List.mem_assoc commit dict.index then
-			int_of_string (List.assoc commit dict.index)
+			List.assoc commit dict.index
 		else
 			-1
 	) dicts in
