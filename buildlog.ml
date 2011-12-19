@@ -109,46 +109,56 @@ let is_in_range range build =
 	| Some b, Some b' -> build >= b && build <= b'
 
 let output_log dicts out commit log =
-	let info = List.map (string_of_info commit) dicts in
-	let output = (List.hd log) :: info @ (List.tl log) in
-	List.iter (fun line -> output_string out (line ^ "\n")) output
+	match commit with
+	| None -> ()
+	| Some commit' ->
+		let info = List.map (string_of_info commit') dicts in
+		let output = (List.hd log) :: info @ (List.tl log) in
+		List.iter (fun line -> output_string out (line ^ "\n")) output
 
 let check_range dicts range commit =
-	let dicts =
-		match range with
-		| _, _, None -> dicts
-		| _, _, Some branch ->
-			try [List.find (fun dict -> dict.branch = branch) dicts]
-			with Not_found -> []
-	in
-	let builds = List.map (fun dict ->
-		if List.mem_assoc commit dict.index then
-			int_of_string (List.assoc commit dict.index)
-		else
-			-1
-	) dicts in
-	List.fold_left (fun a b ->
-		match range with
-		| x, y, _ -> is_in_range (x, y) b || a
-	) false builds
+	match commit with
+	| None -> false
+	| Some commit ->
+		let dicts =
+			match range with
+			| _, _, None -> dicts
+			| _, _, Some branch ->
+				try [List.find (fun dict -> dict.branch = branch) dicts]
+				with Not_found -> []
+		in
+		let builds = List.map (fun dict ->
+			if List.mem_assoc commit dict.index then
+				int_of_string (List.assoc commit dict.index)
+			else
+				-1
+		) dicts in
+		List.fold_left (fun a b ->
+			match range with
+			| x, y, _ -> is_in_range (x, y) b || a
+		) false builds
 
 let process range dicts =
 	let out = Unix.open_process_out "less" in
-	let rec loop log =
-		let line = read_line () in
-		let commit = Scanf.sscanf line "%s %s" (fun a b -> if a = "commit" then Some b else None) in
-		match commit with
-		| Some commit ->
+	let rec loop log commit =
+		let output () =
 			if log <> [] && check_range dicts range commit then
-				output_log dicts out commit (List.rev log);
-			loop [line]
-		| None ->
-			loop (line :: log)
+				output_log dicts out commit (List.rev log)
+		in
+		try
+			let line = read_line () in
+			Scanf.sscanf line "%s %s" (fun a b ->
+				if a = "commit" then begin
+					output ();
+					loop [line] (Some b)
+				end else
+					loop (line :: log) commit
+			)
+		with End_of_file ->
+			output ();
+			Unix.close_process_out out
 	in
-	try
-		loop []
-	with End_of_file ->
-		Unix.close_process_out out
+	loop [] None
 
 let split c s =
 	let rec loop ac s' =
